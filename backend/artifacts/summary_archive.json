@@ -1,0 +1,30 @@
+{
+  "dataset": "/home/claude/clearance/data/Resume/Resume.csv",
+  "tag": "archive",
+  "n_after_dedup": 2482,
+  "n_train": 1985,
+  "n_test": 497,
+  "winner": "LinearSVC",
+  "cv": [
+    {
+      "model": "LinearSVC",
+      "cv_f1_macro_mean": 0.6137,
+      "cv_f1_macro_std": 0.0122,
+      "fit_seconds": 17.1
+    },
+    {
+      "model": "LogisticRegression",
+      "cv_f1_macro_mean": 0.5852,
+      "cv_f1_macro_std": 0.0116,
+      "fit_seconds": 66.8
+    },
+    {
+      "model": "RandomForest",
+      "cv_f1_macro_mean": 0.6117,
+      "cv_f1_macro_std": 0.0182,
+      "fit_seconds": 81.9
+    }
+  ],
+  "held_out_accuracy": 0.6841,
+  "held_out_f1_macro": 0.6384
+}

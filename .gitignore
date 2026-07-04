@@ -1,0 +1,12 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+# data & runtime db (datasets downloaded from Kaggle, see README)
+data/
+backend/clearance.db
+# node
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local

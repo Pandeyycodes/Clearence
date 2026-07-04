@@ -1,0 +1,35 @@
+winner: LogisticRegression
+accuracy: 0.8824
+f1_macro: 0.8210
+
+                           precision    recall  f1-score   support
+
+                 Advocate       1.00      1.00      1.00         2
+                     Arts       1.00      1.00      1.00         1
+       Automation Testing       0.50      1.00      0.67         1
+               Blockchain       1.00      1.00      1.00         1
+         Business Analyst       0.50      1.00      0.67         1
+           Civil Engineer       1.00      1.00      1.00         1
+             Data Science       1.00      1.00      1.00         2
+                 Database       1.00      1.00      1.00         2
+          DevOps Engineer       1.00      1.00      1.00         1
+         DotNet Developer       1.00      1.00      1.00         2
+            ETL Developer       1.00      1.00      1.00         1
+   Electrical Engineering       1.00      1.00      1.00         1
+                       HR       1.00      1.00      1.00         2
+                   Hadoop       1.00      1.00      1.00         2
+       Health and fitness       1.00      1.00      1.00         1
+           Java Developer       0.75      1.00      0.86         3
+      Mechanical Engineer       0.00      0.00      0.00         1
+Network Security Engineer       1.00      1.00      1.00         1
+       Operations Manager       0.50      1.00      0.67         1
+                      PMO       0.00      0.00      0.00         1
+         Python Developer       1.00      1.00      1.00         1
+            SAP Developer       1.00      1.00      1.00         1
+                    Sales       1.00      1.00      1.00         1
+                  Testing       1.00      0.50      0.67         2
+            Web Designing       0.00      0.00      0.00         1
+
+                 accuracy                           0.88        34
+                macro avg       0.81      0.86      0.82        34
+             weighted avg       0.85      0.88      0.85        34

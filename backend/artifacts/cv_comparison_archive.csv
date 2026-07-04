@@ -1,0 +1,4 @@
+model,cv_f1_macro_mean,cv_f1_macro_std,fit_seconds
+LinearSVC,0.6137,0.0122,17.1
+RandomForest,0.6117,0.0182,81.9
+LogisticRegression,0.5852,0.0116,66.8

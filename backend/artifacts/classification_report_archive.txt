@@ -1,0 +1,34 @@
+winner: LinearSVC
+accuracy: 0.6841
+f1_macro: 0.6384
+
+                        precision    recall  f1-score   support
+
+            ACCOUNTANT       0.58      0.88      0.70        24
+              ADVOCATE       0.52      0.62      0.57        24
+           AGRICULTURE       0.89      0.62      0.73        13
+               APPAREL       0.55      0.32      0.40        19
+                  ARTS       0.67      0.38      0.48        21
+            AUTOMOBILE       1.00      0.29      0.44         7
+              AVIATION       0.86      0.83      0.84        23
+               BANKING       0.80      0.70      0.74        23
+                   BPO       0.00      0.00      0.00         4
+  BUSINESS-DEVELOPMENT       0.58      0.79      0.67        24
+                  CHEF       0.82      0.75      0.78        24
+          CONSTRUCTION       0.76      0.86      0.81        22
+            CONSULTANT       0.80      0.17      0.29        23
+              DESIGNER       0.90      0.90      0.90        21
+         DIGITAL-MEDIA       0.75      0.63      0.69        19
+           ENGINEERING       0.68      0.71      0.69        24
+               FINANCE       0.81      0.54      0.65        24
+               FITNESS       0.86      0.75      0.80        24
+            HEALTHCARE       0.58      0.61      0.60        23
+                    HR       0.72      0.95      0.82        22
+INFORMATION-TECHNOLOGY       0.71      1.00      0.83        24
+      PUBLIC-RELATIONS       0.53      0.77      0.63        22
+                 SALES       0.52      0.52      0.52        23
+               TEACHER       0.62      0.90      0.73        20
+
+              accuracy                           0.68       497
+             macro avg       0.69      0.65      0.64       497
+          weighted avg       0.70      0.68      0.67       497

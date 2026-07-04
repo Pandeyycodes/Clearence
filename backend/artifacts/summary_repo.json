@@ -1,0 +1,30 @@
+{
+  "dataset": "/home/claude/clearance/data/Resume-Screening-main/DataSet/UpdatedResumeDataSet.csv",
+  "tag": "repo",
+  "n_after_dedup": 166,
+  "n_train": 132,
+  "n_test": 34,
+  "winner": "LogisticRegression",
+  "cv": [
+    {
+      "model": "LinearSVC",
+      "cv_f1_macro_mean": 0.791,
+      "cv_f1_macro_std": 0.1434,
+      "fit_seconds": 0.5
+    },
+    {
+      "model": "LogisticRegression",
+      "cv_f1_macro_mean": 0.797,
+      "cv_f1_macro_std": 0.15,
+      "fit_seconds": 0.8
+    },
+    {
+      "model": "RandomForest",
+      "cv_f1_macro_mean": 0.6927,
+      "cv_f1_macro_std": 0.05,
+      "fit_seconds": 2.9
+    }
+  ],
+  "held_out_accuracy": 0.8824,
+  "held_out_f1_macro": 0.821
+}
