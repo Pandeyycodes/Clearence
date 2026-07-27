@@ -32,7 +32,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (accuracy_score, classification_report,
-                             confusion_matrix, f1_score)
+                             confusion_matrix, f1_score,
+                             top_k_accuracy_score)
 from sklearn.model_selection import (StratifiedKFold, cross_val_score,
                                      train_test_split)
 from sklearn.pipeline import Pipeline
@@ -117,11 +118,27 @@ def main(csv_path: str, text_col: str, label_col: str, tag: str) -> None:
     acc = accuracy_score(y_test, y_pred)
     f1m = f1_score(y_test, y_pred, average="macro")
     report = classification_report(y_test, y_pred, zero_division=0)
-    print(f"HELD-OUT accuracy {acc:.4f} | f1_macro {f1m:.4f}")
+
+    # Top-3 accuracy: this is a shortlisting tool, so "is the true category in
+    # the model's top 3 guesses?" reflects real use better than top-1 alone.
+    # Uses decision_function (LinearSVC/LogReg) or predict_proba (RandomForest).
+    top3 = None
+    try:
+        if hasattr(winner, "decision_function"):
+            y_scores = winner.decision_function(X_test)
+        else:
+            y_scores = winner.predict_proba(X_test)
+        top3 = top_k_accuracy_score(y_test, y_scores, k=3,
+                                    labels=winner.classes_)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  (top-3 accuracy unavailable: {exc})")
+    top3_str = f" | top-3 acc {top3:.4f}" if top3 is not None else ""
+    print(f"HELD-OUT accuracy {acc:.4f} | f1_macro {f1m:.4f}{top3_str}")
 
     (ARTIFACTS / f"classification_report_{tag}.txt").write_text(
-        f"winner: {winner_name}\naccuracy: {acc:.4f}\nf1_macro: {f1m:.4f}\n\n"
-        + report)
+        f"winner: {winner_name}\naccuracy: {acc:.4f}\nf1_macro: {f1m:.4f}\n"
+        + (f"top_3_accuracy: {top3:.4f}\n" if top3 is not None else "")
+        + "\n" + report)
 
     labels = sorted(np.unique(y))
     cm = confusion_matrix(y_test, y_pred, labels=labels)
@@ -143,7 +160,9 @@ def main(csv_path: str, text_col: str, label_col: str, tag: str) -> None:
                "winner": winner_name,
                "cv": cv_rows,
                "held_out_accuracy": round(acc, 4),
-               "held_out_f1_macro": round(f1m, 4)}
+               "held_out_f1_macro": round(f1m, 4),
+               "held_out_top3_accuracy": round(top3, 4) if top3 is not None
+               else None}
     (ARTIFACTS / f"summary_{tag}.json").write_text(json.dumps(summary,
                                                               indent=2))
     print(f"Artifacts written to {ARTIFACTS}")

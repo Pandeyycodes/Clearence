@@ -84,7 +84,7 @@ a { color: var(--ink); }
 .btn.secondary { background: transparent; color: var(--ink); }
 .btn.secondary:hover { background: rgba(27, 36, 48, 0.06); }
 
-textarea, input[type="text"] {
+textarea, input[type="text"], input[type="email"], input[type="password"] {
   width: 100%; background: var(--paper-raised); color: var(--ink);
   border: 1px solid var(--rule); border-radius: 2px; padding: 10px 12px;
   font-family: var(--sans); font-size: 14px;

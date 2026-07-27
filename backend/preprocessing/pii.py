@@ -25,8 +25,16 @@ except ImportError:
     _NLP = None
 
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-PHONE = re.compile(r"(?<!\d)(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)[\s.-]?)?"
-                   r"\d{3,4}[\s.-]\d{3,4}(?:[\s.-]\d{2,4})?(?!\d)")
+# Matches two common shapes:
+#  1. international mobiles with a leading country code, split 4-5 / 4-5
+#     digits, e.g. "+91 98200 45317" or "+1 415 5551234";
+#  2. US / landline style "(415) 555-1234", "415-555-1234", "022 4567 8901".
+PHONE = re.compile(
+    r"(?<!\d)(?:"
+    r"\+\d{1,3}[\s.-]?\d{4,5}[\s.-]?\d{4,5}"
+    r"|(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)[\s.-]?)?"
+    r"\d{3,4}[\s.-]\d{3,4}(?:[\s.-]\d{2,4})?"
+    r")(?!\d)")
 URL = re.compile(r"(?:https?://|www\.|linkedin\.com/\S*|github\.com/\S*)\S+",
                  re.I)
 STREET = re.compile(r"\b\d{1,5}\s+(?:[A-Z][a-z]+\s){1,3}"

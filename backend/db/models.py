@@ -46,6 +46,9 @@ class Case(Base):
     match_pct = Column(Numeric(5, 2), nullable=True)
     status = Column(String, nullable=False)  # scored | rejected_unsafe | error
     reject_reason = Column(Text, nullable=True)
+    # Which authenticated recruiter ran this screening — the accountability
+    # half of the audit trail ("who", not just "what").
+    screened_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=_now, index=True)
 
     batch = relationship("Batch", back_populates="cases")
@@ -86,3 +89,13 @@ class BiasAuditRun(Base):
     run_at = Column(DateTime, default=_now)
     summary = Column(JSON, nullable=False)
     notes = Column(Text, nullable=True)
+
+
+class User(Base):
+    """A recruiter who logs in to use the tool. NOT a candidate — no resume
+    data lives here, only login credentials (password stored bcrypt-hashed)."""
+    __tablename__ = "users"
+    id = Column(String, primary_key=True, default=_uuid)
+    email = Column(String, unique=True, nullable=False, index=True)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime, default=_now)

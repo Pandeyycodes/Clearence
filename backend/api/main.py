@@ -8,9 +8,13 @@ request handler and are never written anywhere (no DB, no disk, no logs).
 Run:  uvicorn api.main:app --reload --port 8000   (from backend/)
 Docs: http://localhost:8000/docs
 """
-from __future__ import annotations
+# NOTE: deliberately NOT using `from __future__ import annotations`. FastAPI
+# introspects real annotation objects (UploadFile, OAuth2PasswordRequestForm,
+# etc.) to build routes; stringizing them breaks that on some FastAPI
+# versions. Python 3.10+ supports `X | None` natively, so we lose nothing.
 
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -18,29 +22,78 @@ BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
 import joblib
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import (Depends, FastAPI, File, Form, HTTPException, Query,
+                     Request, UploadFile, status)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
-from db.models import Batch, BiasAuditRun, Case, Explanation, RedactedResume, SkillMatch
-from db.session import get_db, init_db
+from db.models import (Batch, BiasAuditRun, Case, Explanation, RedactedResume,
+                       SkillMatch, User)
+from db.session import SessionLocal, get_db, init_db
 from matching.embeddings import METHOD as MATCH_METHOD, match_score
 from matching.skill_gap import skill_gap
 from models.explain import top_terms
 from preprocessing.cleaning import clean_text
 from preprocessing.pii import redact
+from security.auth import (create_access_token, get_current_user,
+                           hash_password, verify_password)
 from security.file_scan import scan
 
 app = FastAPI(title="Clearance", version="1.0.0",
               description="Resume screening with a real audit trail.")
+
+# Rate limiting: cap requests per client IP so no one can hammer the screening
+# endpoints (or brute-force logins). Counters live in memory and reset on
+# restart — fine for a single-instance deployment.
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://your-app.vercel.app"],
+    # Local dev: accept localhost / 127.0.0.1 on any port (Next.js may fall
+    # back to 3001, and localhost != 127.0.0.1 to the browser). For production
+    # add your deployed frontend origin(s) to allow_origins.
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origins=["https://your-app.vercel.app"],
     allow_methods=["*"], allow_headers=["*"],
 )
 
+# Demo login, seeded on startup so the app is usable out of the box. Override
+# with CLEARANCE_DEMO_EMAIL / CLEARANCE_DEMO_PASSWORD; change for production.
+DEMO_EMAIL = os.environ.get("CLEARANCE_DEMO_EMAIL", "recruiter@clearance.local")
+DEMO_PASSWORD = os.environ.get("CLEARANCE_DEMO_PASSWORD", "demo1234")
+
 MODEL_PATH = BACKEND / "artifacts" / "model_archive.joblib"
 _pipeline = None
+
+# Hard cap on any single upload. A resume is a few hundred KB; anything past
+# this is either a mistake or an attempt to exhaust server memory. Read in
+# chunks and abort the moment the cap is crossed, so an oversized file is
+# never fully loaded into memory.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+class UploadTooLarge(ValueError):
+    """Raised when an upload exceeds MAX_UPLOAD_BYTES."""
+
+
+async def _read_capped(file: UploadFile) -> bytes:
+    chunks, total = [], 0
+    while chunk := await file.read(1024 * 1024):
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise UploadTooLarge(
+                f"'{file.filename}' exceeds the "
+                f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @app.on_event("startup")
@@ -48,6 +101,19 @@ def startup():
     global _pipeline
     init_db()
     _pipeline = joblib.load(MODEL_PATH)
+    _seed_demo_user()
+
+
+def _seed_demo_user():
+    """Create the demo recruiter once, so the app is usable immediately."""
+    db = SessionLocal()
+    try:
+        if db.query(User).filter(User.email == DEMO_EMAIL).first() is None:
+            db.add(User(email=DEMO_EMAIL,
+                        hashed_password=hash_password(DEMO_PASSWORD)))
+            db.commit()
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------- helpers
@@ -68,13 +134,15 @@ def _extract_text(filename: str, data: bytes) -> str:
 
 
 def _screen_one(db: Session, filename: str, data: bytes, jd_text: str,
-                batch_id: str | None = None) -> Case:
+                batch_id: str | None = None,
+                screened_by: str | None = None) -> Case:
     """Scan -> extract -> redact -> classify -> match -> persist ONE file."""
     # 1. Security scan — before any parsing.
     safe, reason = scan(filename, data)
     if not safe:
         case = Case(batch_id=batch_id, filename=filename,
-                    status="rejected_unsafe", reject_reason=reason)
+                    status="rejected_unsafe", reject_reason=reason,
+                    screened_by=screened_by)
         db.add(case); db.commit(); db.refresh(case)
         return case
 
@@ -99,7 +167,7 @@ def _screen_one(db: Session, filename: str, data: bytes, jd_text: str,
         matched, missing = skill_gap(redacted_text, jd_text)
 
         case = Case(batch_id=batch_id, filename=filename, category=category,
-                    match_pct=pct, status="scored")
+                    match_pct=pct, status="scored", screened_by=screened_by)
         db.add(case); db.flush()
         db.add(RedactedResume(case_id=case.id, redacted_text=redacted_text,
                               fields_redacted=fields))
@@ -111,7 +179,7 @@ def _screen_one(db: Session, filename: str, data: bytes, jd_text: str,
     except Exception as exc:  # noqa: BLE001 — audit trail needs the error
         db.rollback()
         case = Case(batch_id=batch_id, filename=filename, status="error",
-                    reject_reason=str(exc)[:500])
+                    reject_reason=str(exc)[:500], screened_by=screened_by)
         db.add(case); db.commit(); db.refresh(case)
         return case
 
@@ -122,6 +190,7 @@ def _case_json(case: Case) -> dict:
         "category": case.category,
         "match_pct": float(case.match_pct) if case.match_pct is not None else None,
         "status": case.status, "reject_reason": case.reject_reason,
+        "screened_by": case.screened_by,
         "created_at": case.created_at.isoformat() if case.created_at else None,
         "fields_redacted": case.redacted.fields_redacted if case.redacted else [],
         "redacted_preview": (case.redacted.redacted_text[:1200]
@@ -134,23 +203,56 @@ def _case_json(case: Case) -> dict:
 
 
 # ----------------------------------------------------------------- routes
+@app.post("/token")
+@limiter.limit("20/minute")  # throttle credential-guessing
+def login(request: Request,
+          form: OAuth2PasswordRequestForm = Depends(OAuth2PasswordRequestForm),
+          db: Session = Depends(get_db)):
+    """Exchange email + password for a JWT. OAuth2 form uses 'username' for
+    the email field."""
+    user = db.query(User).filter(User.email == form.username).first()
+    if user is None or not verify_password(form.password, user.hashed_password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "Incorrect email or password.",
+                            headers={"WWW-Authenticate": "Bearer"})
+    return {"access_token": create_access_token(user.email),
+            "token_type": "bearer"}
+
+
 @app.post("/screen")
-async def screen(file: UploadFile = File(...), jd_text: str = Form(""),
-                 db: Session = Depends(get_db)):
-    data = await file.read()
-    case = _screen_one(db, file.filename, data, jd_text)
+@limiter.limit("30/minute")
+async def screen(request: Request, file: UploadFile = File(...),
+                 jd_text: str = Form(""), db: Session = Depends(get_db),
+                 user: str = Depends(get_current_user)):
+    try:
+        data = await _read_capped(file)
+    except UploadTooLarge as exc:
+        raise HTTPException(413, str(exc))
+    case = _screen_one(db, file.filename, data, jd_text, screened_by=user)
     return _case_json(case)
 
 
 @app.post("/batch")
-async def batch(files: list[UploadFile] = File(...), jd_text: str = Form(...),
-                db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+async def batch(request: Request, files: list[UploadFile] = File(...),
+                jd_text: str = Form(...), db: Session = Depends(get_db),
+                user: str = Depends(get_current_user)):
     b = Batch(jd_text=jd_text)
     db.add(b); db.commit(); db.refresh(b)
     cases = []
     for f in files:
-        data = await f.read()
-        cases.append(_screen_one(db, f.filename, data, jd_text, batch_id=b.id))
+        try:
+            data = await _read_capped(f)
+        except UploadTooLarge as exc:
+            # One oversized file must not sink the whole batch — record it as
+            # an errored case and keep going, so the audit trail stays complete.
+            c = Case(batch_id=b.id, filename=f.filename, status="error",
+                     reject_reason=str(exc), screened_by=user)
+            db.add(c); db.commit(); db.refresh(c)
+            cases.append(c)
+            continue
+        cases.append(_screen_one(db, f.filename, data, jd_text,
+                                 batch_id=b.id, screened_by=user))
     ranked = sorted((_case_json(c) for c in cases),
                     key=lambda c: (c["match_pct"] is None,
                                    -(c["match_pct"] or 0)))
@@ -158,7 +260,8 @@ async def batch(files: list[UploadFile] = File(...), jd_text: str = Form(...),
 
 
 @app.get("/cases/{case_id}")
-def get_case(case_id: str, db: Session = Depends(get_db)):
+def get_case(case_id: str, db: Session = Depends(get_db),
+             user: str = Depends(get_current_user)):
     case = db.get(Case, case_id)
     if case is None:
         raise HTTPException(404, "Case not found.")
@@ -166,14 +269,16 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/cases")
-def list_cases(limit: int = 50, db: Session = Depends(get_db)):
+def list_cases(limit: int = 50, db: Session = Depends(get_db),
+               user: str = Depends(get_current_user)):
     rows = (db.query(Case).order_by(Case.created_at.desc())
             .limit(min(limit, 200)).all())
     return [_case_json(c) for c in rows]
 
 
 @app.get("/batches/{batch_id}")
-def get_batch(batch_id: str, db: Session = Depends(get_db)):
+def get_batch(batch_id: str, db: Session = Depends(get_db),
+              user: str = Depends(get_current_user)):
     b = db.get(Batch, batch_id)
     if b is None:
         raise HTTPException(404, "Batch not found.")
@@ -185,7 +290,8 @@ def get_batch(batch_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/bias-report")
-def bias_report(db: Session = Depends(get_db)):
+def bias_report(db: Session = Depends(get_db),
+                user: str = Depends(get_current_user)):
     run = (db.query(BiasAuditRun).order_by(BiasAuditRun.run_at.desc())
            .first())
     if run is None:
@@ -197,7 +303,8 @@ def bias_report(db: Session = Depends(get_db)):
 
 @app.get("/compare")
 def compare(case_ids: str = Query(..., description="comma-separated, 2-4 ids"),
-            db: Session = Depends(get_db)):
+            db: Session = Depends(get_db),
+            user: str = Depends(get_current_user)):
     ids = [i.strip() for i in case_ids.split(",") if i.strip()]
     if not 2 <= len(ids) <= 4:
         raise HTTPException(400, "Provide 2 to 4 case ids.")

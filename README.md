@@ -1,123 +1,315 @@
+<div align="center">
+
 # Clearance
 
-**Resume screening with a real audit trail — and honest numbers.**
+### Resume screening with a real audit trail — and honest numbers.
 
-Every resume that enters Clearance is security-scanned, PII-redacted, classified into a job category, scored against a job description, and logged as a retrievable case record. Nothing gets scored before it is scanned and redacted, and that ordering is enforced in the backend, not just implied by the UI.
+Every resume is **security-scanned**, **PII-redacted**, **classified**, **scored against a job description**, and **logged as an immutable case record** — behind **JWT authentication**, with a built-in **bias audit**. Nothing is scored before it is scanned and redacted, and that ordering is enforced in the backend, not implied by the UI.
 
-The project began as an audit of a widely-copied resume-screening notebook that reports ~99% accuracy. That number is an artifact of **data leakage** — the dataset contains each resume 4–12 times, so a random train/test split grades the model on resumes it memorized. Clearance reproduces the bug, fixes it, ships a regression test that makes it impossible to reintroduce, and reports the real numbers. See [The honest numbers](#the-honest-numbers).
+**Decision support, not automation.** No score from this system should be the reason a human does not read a resume.
+
+`FastAPI` · `scikit-learn` · `SQLAlchemy / SQLite` · `Next.js 14` · `TypeScript` · `JWT` · `Docker`
+
+</div>
 
 ---
 
 ## Table of contents
 
-- [Architecture](#architecture)
-- [Features](#features)
+- [Why this project exists](#why-this-project-exists)
+- [System architecture](#system-architecture)
+- [The screening pipeline](#the-screening-pipeline)
+- [Data model](#data-model)
+- [Authentication and abuse control](#authentication-and-abuse-control)
 - [The honest numbers](#the-honest-numbers)
+- [The data-leakage story](#the-data-leakage-story)
+- [Screenshots](#screenshots)
 - [Quickstart](#quickstart)
-  - [1. Backend](#1-backend)
-  - [2. Frontend](#2-frontend)
-  - [3. Test it with a resume](#3-test-it-with-a-resume)
-- [Retraining the model](#retraining-the-model)
-- [Running the bias audit](#running-the-bias-audit)
-- [Running the test suite](#running-the-test-suite)
+- [Trying it with the bundled demo](#trying-it-with-the-bundled-demo)
 - [API reference](#api-reference)
-- [Database](#database)
+- [Testing and CI](#testing-and-ci)
+- [Privacy and security model](#privacy-and-security-model)
 - [Project structure](#project-structure)
-- [Methodology](#methodology)
-- [Privacy guarantee](#privacy-guarantee)
-- [Design system](#design-system)
-- [Optional upgrades](#optional-upgrades)
-- [Deployment](#deployment)
+- [Technology choices](#technology-choices)
 - [Limitations](#limitations)
 
 ---
 
-## Architecture
+## Why this project exists
 
+The most-copied resume-classification notebook online reports about **99% accuracy**. That number is an artifact of **data leakage**: the dataset contains each resume many times over, so a random train/test split grades the model on documents it has already memorized.
+
+Clearance is the version that tells the truth. It removes the leakage, proves the honest accuracy, ships a regression test that makes the bug impossible to reintroduce, and wraps the model in the things a real screening tool needs but demos usually skip: a security gate, PII redaction, an explainable score, an audit trail, authentication, and a fairness check.
+
+---
+
+## System architecture
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+flowchart TB
+    subgraph Client["Frontend — Next.js 14 / TypeScript"]
+        L["Login"]
+        I["Intake / dropzone"]
+        B["Batch table and grid + CSV export"]
+        C["Compare view"]
+        H["Case history"]
+    end
+
+    subgraph API["Backend — FastAPI"]
+        AUTH["JWT auth + rate limiting"]
+        ORCH["Enforced intake orchestrator"]
+    end
+
+    subgraph SVC["Processing layers"]
+        SEC["Security scan"]
+        PII["PII redaction"]
+        ML["TF-IDF + LinearSVC + explainability"]
+        MATCH["JD match + skill gap"]
+    end
+
+    DB[("SQLite audit trail<br/>via SQLAlchemy")]
+
+    L -->|"token"| AUTH
+    I --> AUTH
+    B --> AUTH
+    C --> AUTH
+    H --> AUTH
+    AUTH --> ORCH
+    ORCH --> SEC --> PII --> ML --> MATCH --> DB
+    DB -->|"JSON"| Client
 ```
-                        ┌──────────────────────── backend (FastAPI) ───────────────────────┐
- resume file ──────────►│ 1. security/file_scan.py   macro & PDF-JavaScript pre-check      │
- (pdf/docx/txt)         │        │  unsafe → case row: status='rejected_unsafe' (no parse) │
- + JD text              │ 2. text extraction         in memory only, never persisted       │
-                        │ 3. preprocessing/pii.py    redact emails/phones/urls/addresses   │
-                        │        │  raw text discarded here — only redacted text survives  │
-                        │ 4. models/…                TF-IDF + LinearSVC category           │
-                        │        │                   + models/explain.py top terms         │
-                        │ 5. matching/embeddings.py  JD match score (term coverage)        │
-                        │    matching/skill_gap.py   matched / missing skills              │
-                        │ 6. db/…  (SQLite)          case + redacted text + skills +       │
-                        │                            explanation written as one record     │
-                        └──────────────────────────────┬────────────────────────────────--┘
-                                                       │ JSON
-                        ┌──────────────────────────────▼──────────────────────────────────┐
-                        │ frontend (Next.js App Router, TypeScript, custom design system)  │
-                        │ intake → processing checklist → case card (redaction sweep +     │
-                        │ stamp) · batch table/grid + CSV export · compare view ·          │
-                        │ case history · permanent bias-audit disclosure                   │
-                        └───────────────────────────────────────────────────────────────--┘
+
+Each layer is independent: the security, privacy, model, and matching modules can be swapped without touching the others. Optional dependencies (spaCy, sentence-transformers, oletools) upgrade behaviour automatically when present and are never required.
+
+---
+
+## The screening pipeline
+
+The order is guaranteed in `api/main.py::_screen_one`, not in the UI. A file is never parsed until it has passed the security scan, and raw text never survives past redaction.
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    actor R as Recruiter
+    participant F as Frontend
+    participant A as FastAPI
+    participant S as Security scan
+    participant P as PII redaction
+    participant M as Model + matcher
+    participant DB as SQLite
+
+    R->>F: Upload resume + JD
+    F->>A: POST /screen  (Bearer token)
+    A->>A: Verify JWT, enforce rate limit, cap upload size
+    A->>S: Scan bytes (macros, PDF JavaScript/Launch)
+    alt Unsafe
+        S-->>DB: case status = rejected_unsafe (never parsed)
+    else Safe
+        A->>A: Extract text (in memory only)
+        A->>P: Redact email / phone / URL / address / name
+        Note over P: raw text dropped here — only redacted text continues
+        A->>M: Classify + explain, score vs JD, skill gap
+        M-->>DB: case + redacted text + skills + explanation + screened_by
+    end
+    DB-->>F: Case JSON
+    F-->>R: Category, match %, skills, explanation, redacted preview
 ```
 
-## Features
+---
 
-**Pipeline**
-- Leakage-free training: dedup before split, split before fit, vectorizer fitted on train only, enforced by a failing test if violated
-- 5-fold stratified cross-validation comparing LinearSVC / LogisticRegression / RandomForest (all `class_weight='balanced'`), winner chosen on `f1_macro`
-- Held-out classification report + confusion matrix saved to `backend/artifacts/`
-- Per-prediction explainability: exact TF-IDF × coefficient contributions (no post-hoc approximation — the model is linear, so the explanation is the model)
-- Name-swap bias audit (12 masculine/feminine name pairs × resume sample), results stored verbatim in the database and surfaced permanently in the UI
+## Data model
 
-**Screening service**
-- Security pre-check before any parsing: VBA macros in DOCX (zip inspection, `olevba` if installed); for PDFs, structural parsing that rejects only actions that execute something (`/JavaScript`, `/Launch` — on open, on pages, or in annotations). A bare `/OpenAction` that just navigates to page 1 is allowed: LaTeX, Canva, and many resume exporters add one, and rejecting it would false-positive on legitimate resumes
-- PII redaction (emails, phones, URLs/profiles, street addresses; person names when spaCy is installed) — the raw file and unredacted text are never written to disk, database, or logs
-- JD match score kept deliberately separate from the category classifier (see [Methodology](#methodology))
-- Skill-gap analysis: which JD skills the resume covers and which it lacks
-- Full audit trail: every screening — including rejected and errored files — is a retrievable case row
+One screening writes a linked set of rows across five tables. Rejects and errors still produce a `cases` row — that is what makes it an audit trail rather than a results list.
 
-**Frontend**
-- Case File / Evidence Intake design system (paper palette, IBM Plex Mono data, hairline rules, near-zero radii)
-- Intake dropzone → live processing checklist → case card with a one-time redaction-sweep + rotated-stamp animation (respects `prefers-reduced-motion`)
-- Batch view: sortable table ⇄ grid toggle, CSV export, checkbox selection → side-by-side compare view with skill-diff highlighting
-- Case history backed by the database
-- Bias-audit disclosure permanently visible on batch views — not a dismissible modal
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+erDiagram
+    USERS {
+        string id PK
+        string email
+        string hashed_password
+    }
+    BATCHES {
+        string id PK
+        text jd_text
+        datetime created_at
+    }
+    CASES {
+        string id PK
+        string batch_id FK
+        string filename
+        string category
+        numeric match_pct
+        string status
+        text reject_reason
+        string screened_by
+        datetime created_at
+    }
+    REDACTED_RESUMES {
+        string case_id PK
+        text redacted_text
+        json fields_redacted
+    }
+    SKILL_MATCHES {
+        string case_id PK
+        json matched_skills
+        json missing_skills
+    }
+    EXPLANATIONS {
+        string case_id PK
+        json top_terms
+    }
+    BIAS_AUDIT_RUNS {
+        string id PK
+        json summary
+        text notes
+    }
+
+    BATCHES ||--o{ CASES : contains
+    CASES ||--|| REDACTED_RESUMES : has
+    CASES ||--|| SKILL_MATCHES : has
+    CASES ||--|| EXPLANATIONS : has
+```
+
+The only resume text stored anywhere is `redacted_resumes.redacted_text`. The raw file and unredacted text live only inside the request handler, in memory.
+
+---
+
+## Authentication and abuse control
+
+Recruiters authenticate with email and password and receive a signed JWT. Every later request is verified by signature — stateless, no database hit per call. Each case records `screened_by`, so the audit trail captures **who** ran a screening, not just what happened.
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    actor U as Recruiter
+    participant F as Frontend
+    participant A as FastAPI
+    participant DB as users table
+
+    U->>F: email + password
+    F->>A: POST /token
+    A->>DB: look up user
+    A->>A: bcrypt.verify(password, hash)
+    A-->>F: signed JWT (HS256)
+    F->>F: store token
+    U->>F: open a protected page
+    F->>A: GET /cases  (Authorization: Bearer ...)
+    A->>A: verify signature -> allow or 401
+    A-->>F: data
+```
+
+| Control | Value | Purpose |
+|---|---|---|
+| Passwords | bcrypt hash only | A database leak never exposes credentials |
+| Token | JWT / HS256, signed with `CLEARANCE_SECRET_KEY` | Stateless auth, cannot be forged without the key |
+| Rate limit — `/token` | 20 / minute per IP | Throttles credential guessing |
+| Rate limit — `/screen` | 30 / minute per IP | Prevents endpoint abuse |
+| Rate limit — `/batch` | 10 / minute per IP | Prevents mass upload abuse |
+| Upload cap | 10 MB per file, read in chunks | Prevents memory-exhaustion uploads |
+
+Secrets are read from the environment; the built-in key is for local development only. `/health` is intentionally public.
+
+---
 
 ## The honest numbers
 
 | Setup | Accuracy | f1_macro | Verdict |
 |---|---|---|---|
-| Repo dataset, duplicates left in (the original notebook) | **99.5%** | — | **Fake.** 962 rows, only 166 unique resumes; the test set is memorized training data. |
-| Repo dataset, deduplicated first | 88.2% | 0.821 | Honest but fragile — the test set is 34 documents. |
-| **Kaggle 2,484-resume dataset, 24 classes (this model)** | **68.4%** | **0.638** | Honest. CV winner LinearSVC; per-class report and confusion matrix in `backend/artifacts/`. |
+| Repo dataset, duplicates left in (the original notebook) | **99.5%** | — | **Fake.** The test set is memorized training data. |
+| Repo dataset, deduplicated first | 88.2% | 0.821 | Honest but fragile — a 34-document test set. |
+| **Kaggle 2,484-resume dataset, 24 classes (this model)** | **68.4%** | **0.638** | Honest. CV winner LinearSVC. |
 
-68% is the real state of TF-IDF + linear models on 24-way resume classification; published results on the same dataset agree, and transformer fine-tunes reach roughly the low-to-mid 80s. Part of the ceiling is the labels: a consultant's resume genuinely reads like business development (CONSULTANT recall: 0.17). Full analysis, including what would raise the number honestly and what wouldn't, is in [`RESULTS.md`](RESULTS.md).
+68% is the real state of TF-IDF plus linear models on 24-way resume classification; published results agree, and transformer fine-tunes reach the low-to-mid 80s. Because Clearance produces a **ranked shortlist**, `models/train.py` also reports **top-3 accuracy** — whether the true category is among the model's top three guesses — which is the metric that matches how the tool is actually used.
+
+---
+
+## The data-leakage story
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+flowchart LR
+    subgraph Wrong["Original notebook — leakage"]
+        D1["Dataset with duplicate resumes"] --> SP1["Random split"]
+        SP1 --> TR1["Train"]
+        SP1 --> TE1["Test"]
+        TR1 -. same resume .-> TE1
+        TE1 --> R1["~99% — memorization"]
+    end
+
+    subgraph Right["Clearance — leakage-free"]
+        D2["Dataset"] --> DD["Deduplicate FIRST"]
+        DD --> SP2["Stratified split"]
+        SP2 --> TR2["Train"]
+        SP2 --> TE2["Test (untouched)"]
+        TR2 --> FIT["TF-IDF fitted inside a Pipeline<br/>(refit per CV fold)"]
+        FIT --> R2["68.4% — honest generalization"]
+    end
+```
+
+Two defenses, both enforced: deduplicate before splitting, and keep the vectorizer inside the `Pipeline` so cross-validation refits it per fold and validation text never leaks vocabulary. A regression test (`tests/test_no_leakage.py`) uses a booby-trapped vectorizer that raises the instant any held-out document reaches a `.fit()` call, so the bug cannot silently return.
+
+---
+
+## Screenshots
+
+> Captured from the bundled demo (four resumes screened against the Senior Accountant JD).
+
+<div align="center">
+
+### Sign in — the API is access-controlled
+<img src="docs/screenshots/01-login.png" alt="Login screen" width="820">
+
+### Evidence intake
+<img src="docs/screenshots/02-intake.png" alt="Intake dropzone and job description" width="820">
+
+### Case card — category, match stamp, matched and missing skills, explanation, redacted text
+<img src="docs/screenshots/03-case-card.png" alt="Single case result card" width="820">
+
+### Ranked batch — table view with CSV export
+<img src="docs/screenshots/04-batch-table.png" alt="Batch table view" width="820">
+
+### Ranked batch — grid view
+<img src="docs/screenshots/05-batch-grid.png" alt="Batch grid view" width="820">
+
+### Exported CSV
+<img src="docs/screenshots/06-csv-export.png" alt="Exported CSV opened in a spreadsheet" width="820">
+
+### Side-by-side compare with unique-skill diff
+<img src="docs/screenshots/07-compare.png" alt="Compare view" width="820">
+
+### Case history and the permanent bias-audit disclosure
+<img src="docs/screenshots/08-history-bias.png" alt="Case history and bias disclosure" width="820">
+
+</div>
+
+---
 
 ## Quickstart
 
-Prerequisites: **Python 3.10+**, **Node 18+**. Tested on Linux/macOS; Windows works with the usual `venv\Scripts\activate` substitutions.
+Prerequisites: Python 3.10+, Node 18+.
 
-Clone, then:
+### Option A — Docker (whole stack, one command)
 
-### 1. Backend
+```bash
+docker compose up --build
+```
+
+Backend on `http://localhost:8000` (interactive docs at `/docs`), frontend on `http://localhost:3000`. The SQLite audit trail persists in a named volume.
+
+### Option B — run each service directly
+
+Backend:
 
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
 uvicorn api.main:app --reload --port 8000
 ```
 
-That's it — the trained model ships in `backend/artifacts/model_archive.joblib` and the SQLite database (`backend/clearance.db`) is created automatically on first startup. No database server, no migrations, no environment variables.
-
-Sanity check: open **http://localhost:8000/docs** (interactive Swagger UI for every route) or:
-
-```bash
-curl http://localhost:8000/health
-# {"status":"ok","model_loaded":true,"match_method":"jd-term-coverage (tfidf)"}
-```
-
-### 2. Frontend
-
-In a second terminal:
+Frontend, in a second terminal:
 
 ```bash
 cd frontend
@@ -125,180 +317,130 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**. The frontend talks to `http://localhost:8000` by default; point it elsewhere with `NEXT_PUBLIC_API_URL` in `frontend/.env.local`.
+Open `http://localhost:3000` and sign in with the seeded demo recruiter:
 
-### 3. Test it with a resume
-
-**In the UI:** drop any `.pdf`, `.docx`, or `.txt` resume on the intake screen, paste a job description, press **Screen resume**. You'll see the processing checklist, then the case card: category, JD match stamp, matched/missing skill chips, the model's top terms, and the redacted text that was stored. Drop **multiple** files to get a ranked batch instead — sort it, export CSV, tick 2–4 checkboxes and press **Compare selected**.
-
-**From the command line:**
-
-```bash
-# single resume
-curl -X POST http://localhost:8000/screen \
-  -F "file=@/path/to/resume.pdf" \
-  -F "jd_text=Senior accountant. Requirements: accounting, general ledger, financial reporting, auditing, Excel."
-
-# ranked batch
-curl -X POST http://localhost:8000/batch \
-  -F "files=@resume1.pdf" -F "files=@resume2.pdf" \
-  -F "jd_text=..."
+```
+email:    recruiter@clearance.local
+password: demo1234
 ```
 
-**Test the security scan** (this file is rejected before parsing and logged as `rejected_unsafe`):
+The trained model ships in `backend/artifacts/`, and `clearance.db` plus the demo user are created automatically on first startup. No database server, no migrations.
 
-```bash
-printf '%%PDF-1.4 /OpenAction /JavaScript (app.alert(1))' > evil.pdf
-curl -X POST http://localhost:8000/screen -F "file=@evil.pdf" -F "jd_text=x"
-```
+---
 
-Everything you screen appears under **Case history** in the UI, backed by `GET /cases`.
+## Trying it with the bundled demo
 
-## Retraining the model
+The `demo_data/` folder contains four full resumes (with fake PII to demonstrate redaction) and a Senior Accountant job description. Screening all four produces a clean ranking:
 
-The datasets are not committed (56 MB+). To retrain from scratch:
+| Candidate | Predicted category | JD match |
+|---|---|---|
+| Priya Sharma — Senior Accountant | ACCOUNTANT | 85.3% |
+| Rohit Verma — Financial Analyst | FINANCE | 54.8% |
+| Ananya Iyer — Data Analyst | FINANCE | 19.4% |
+| Arjun Mehta — Sales Manager | BUSINESS-DEVELOPMENT | 6.1% |
 
-1. Download the [Kaggle resume dataset](https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset) (`archive.zip`) → place `Resume.csv` at `data/Resume/Resume.csv`.
-2. Optionally, [UpdatedResumeDataSet.csv](https://www.kaggle.com/datasets/gauravduttakiit/resume-dataset) → `data/Resume-Screening-main/DataSet/UpdatedResumeDataSet.csv` (used only to reproduce the leakage comparison).
-3. From `backend/`:
+In the UI, drop all four files on the intake screen and paste `demo_data/jd.txt` to reproduce the ranked batch, then select candidates and compare them. Every case shows `email, phone, url, address` redacted.
 
-```bash
-python models/train.py
-```
+---
 
-This deduplicates, splits, runs the 3-model 5-fold CV comparison, evaluates the winner once on the held-out set, and writes to `backend/artifacts/`: the model, `cv_comparison_*.csv`, `classification_report_*.txt`, `confusion_matrix_*.png`, and `summary_*.json`. Takes a few minutes on a laptop (RandomForest CV dominates the time).
+## API reference
 
-## Running the bias audit
+| Method | Route | Auth | Purpose |
+|---|---|---|---|
+| POST | `/token` | public | Exchange email + password for a JWT |
+| POST | `/screen` | required | One file + JD → scan → redact → classify → match → persist → case JSON |
+| POST | `/batch` | required | Many files + one JD → one batch, one case per file, ranked |
+| GET | `/cases/{id}` | required | Retrieve a past case |
+| GET | `/cases?limit=N` | required | Most recent cases, newest first |
+| GET | `/batches/{id}` | required | A past batch with all cases, ranked |
+| GET | `/compare?case_ids=a,b[,c,d]` | required | 2–4 cases aligned, with per-candidate unique-skill diff |
+| GET | `/bias-report` | required | Latest bias-audit run for the permanent disclosure |
+| GET | `/health` | public | Model-loaded check and active match method |
 
-Requires the dataset from the previous section. From `backend/`:
+Every scored case returns: `id`, `category`, `match_pct`, `status`, `screened_by`, `fields_redacted`, `redacted_preview`, `matched_skills`, `missing_skills`, `top_terms`, and `match_method`.
 
-```bash
-python -m models.bias_audit
-```
+---
 
-Swaps 12 masculine/feminine-coded name pairs into a 100-resume sample (1,200 comparisons), counts how often the predicted category changes because of the name alone, and writes the full result — distributions, flip examples, and an honest scope note — to the `bias_audit_runs` table. The UI's batch view reads the latest run via `GET /bias-report` and displays it permanently. Last recorded run: **0 flips in 1,200 comparisons (0.00%)**, with the explicit caveat that this measures first-name sensitivity only and does not certify the system as unbiased.
-
-## Running the test suite
+## Testing and CI
 
 ```bash
 cd backend
 pytest tests/ -v
 ```
 
-`tests/test_no_leakage.py` contains the anti-leakage guarantee:
-- `test_no_duplicates_cross_split` — fails if any resume text appears in both train and test.
-- `test_vectorizer_never_fits_test_text` — a booby-trapped `TfidfVectorizer` that raises the moment any held-out document reaches a `.fit()` call, then asserts that the trap actually fires.
+| Test file | Guarantee it protects |
+|---|---|
+| `test_no_leakage.py` | No resume crosses the train/test boundary; held-out text never reaches `.fit()` |
+| `test_pii.py` | Every PII field is removed and honestly reported; clean text is never over-redacted |
+| `test_file_scan.py` | Clean files pass; macros, spoofed files, and executable PDF actions are rejected |
+| `test_auth.py` | Login works, protected routes reject without a token and accept with one, and `screened_by` is recorded |
 
-(The tests skip automatically if the dataset hasn't been downloaded.)
+The PII, security, and auth tests build every fixture in memory and need no dataset. The whole suite runs in GitHub Actions (`.github/workflows/ci.yml`) on every push, so none of these guarantees can silently regress.
 
-## API reference
+---
 
-| Method | Route | Purpose |
-|---|---|---|
-| `POST` | `/screen` | One file + JD → scan → redact → classify → match → persist → full case JSON |
-| `POST` | `/batch` | Multiple files + one JD → one batch row, one case per file → ranked list |
-| `GET` | `/cases/{id}` | Retrieve a past case (history / "case file" view) |
-| `GET` | `/cases?limit=N` | Most recent cases, newest first |
-| `GET` | `/batches/{id}` | A past batch with all of its cases, ranked |
-| `GET` | `/compare?case_ids=a,b[,c,d]` | 2–4 cases aligned for side-by-side view, plus per-candidate `unique_skills` diff |
-| `GET` | `/bias-report` | Latest bias audit run for the permanent UI disclosure |
-| `GET` | `/health` | Model-loaded check + active match method |
+## Privacy and security model
 
-Every scored case returns: `id`, `category`, `match_pct`, `status`, `fields_redacted`, `redacted_preview`, `matched_skills`, `missing_skills`, `top_terms` (term + weight), and `match_method` (the API tells you which matcher is active rather than letting the UI imply a fancier one).
+**What is never stored** (memory-only inside one request, then dropped): the raw uploaded file, the unredacted text, and all identifying PII.
 
-## Database
+**What is stored**: redacted resume text, the derived category, score, skills, and explanation, and a note of which recruiter ran the screening.
 
-**SQLite by design.** This is a single-writer demo workload; SQLite gives a zero-setup, fully inspectable audit trail in one file (`backend/clearance.db` — open it with any SQLite browser). The models are written in dialect-agnostic SQLAlchemy, so moving to Postgres is a connection-string change:
+**Security gate** (before any parsing):
 
-```bash
-export CLEARANCE_DB_URL=postgresql://user:pass@host/clearance
-```
+- DOCX is inspected as a ZIP for the embedded macro payload; `.docm` / `.dotm` are rejected outright.
+- PDF structure is parsed and only executing actions (`/JavaScript`, `/Launch`) are rejected; a benign go-to-page `/OpenAction` is allowed, so legitimate LaTeX and Canva exports are not false-rejected.
+- Unsafe files are logged as `rejected_unsafe` and never parsed.
 
-Schema (five tables, one audit trail):
-
-| Table | One row per | Key columns |
-|---|---|---|
-| `batches` | batch run against one JD | `jd_text` |
-| `cases` | screening attempt (including rejects/errors) | `filename`, `category`, `match_pct`, `status`, `reject_reason`, `batch_id` |
-| `redacted_resumes` | scored case | `redacted_text`, `fields_redacted` — the only resume text that exists anywhere |
-| `skill_matches` | scored case | `matched_skills`, `missing_skills` |
-| `explanations` | scored case | `top_terms` |
-| `bias_audit_runs` | audit run (model-level, independent of cases) | `summary`, `notes` |
+---
 
 ## Project structure
 
 ```
 clearance/
 ├── backend/
-│   ├── api/main.py                  # FastAPI app, CORS, all routes, the enforced intake order
-│   ├── db/
-│   │   ├── models.py                # SQLAlchemy schema (audit trail)
-│   │   └── session.py               # engine/session; CLEARANCE_DB_URL override
+│   ├── api/main.py              FastAPI app, JWT + rate limiting, enforced intake order
+│   ├── security/
+│   │   ├── file_scan.py         macro / PDF-action pre-check
+│   │   └── auth.py              bcrypt hashing + JWT issue/verify
 │   ├── preprocessing/
-│   │   ├── cleaning.py              # minimal text normalisation
-│   │   └── pii.py                   # redaction; returns redacted text + what was masked
-│   ├── security/file_scan.py        # macro/JS pre-check; rejects before parsing
+│   │   ├── cleaning.py          text normalisation for the model
+│   │   └── pii.py               redaction; returns redacted text + what was masked
 │   ├── models/
-│   │   ├── train.py                 # dedup → split → 5-fold CV × 3 models → held-out report
-│   │   ├── explain.py               # exact linear-model term contributions
-│   │   └── bias_audit.py            # name-swap audit → bias_audit_runs
+│   │   ├── train.py             dedup → split → 5-fold CV × 3 models → held-out report + top-3
+│   │   ├── explain.py           exact linear-model term contributions
+│   │   └── bias_audit.py        name-swap audit → bias_audit_runs
 │   ├── matching/
-│   │   ├── embeddings.py            # JD match score (term coverage / sentence-transformers)
-│   │   └── skill_gap.py             # matched/missing skills vs the JD
-│   ├── tests/test_no_leakage.py     # the anti-leakage guarantee
-│   ├── artifacts/                   # trained model, CV tables, reports, confusion matrices
-│   └── requirements.txt
+│   │   ├── embeddings.py        JD match score (term coverage / sentence-transformers)
+│   │   └── skill_gap.py         matched / missing skills vs the JD
+│   ├── db/                      SQLAlchemy models + session
+│   ├── tests/                   leakage, PII, file-scan, and auth guarantees
+│   ├── artifacts/               trained model, CV tables, reports, confusion matrices
+│   └── Dockerfile
 ├── frontend/
-│   ├── app/                         # Next.js App Router pages (intake, case, batch, compare, history)
-│   ├── components/case.tsx          # case card, chips, stamp, terms, bias disclosure
-│   ├── lib/api.ts                   # typed fetch wrapper for every backend route
-│   └── app/globals.css              # the Case File design system (tokens + signature animation)
-├── RESULTS.md                       # full experiment write-up
-└── README.md
+│   ├── app/                     App Router pages: login, intake, case, batch, compare, history
+│   ├── components/              case card, nav, auth gate
+│   ├── lib/api.ts               typed fetch wrapper with token handling
+│   └── Dockerfile
+├── demo_data/                   four sample resumes + a job description
+├── docker-compose.yml
+└── .github/workflows/ci.yml
 ```
 
-## Methodology
+---
 
-**Why dedup-then-split is non-negotiable.** With duplicates, the test set contains documents the model saw during training; the reported score measures memorization, not generalization. Reproduced in `RESULTS.md`: 99.5% → 88.2% on the same data once duplicates are removed.
+## Technology choices
 
-**Why the vectorizer lives inside the Pipeline.** `cross_val_score` on a `Pipeline` refits TF-IDF per fold, so validation folds never leak vocabulary or document frequencies into training. Fitting the vectorizer on all data before CV is the second-most-common leak in text classification, and it's structurally impossible here.
+| Concern | Choice | Reason |
+|---|---|---|
+| API framework | FastAPI | Auto-generated interactive docs, type-driven validation, async file uploads |
+| Model | TF-IDF + LinearSVC | Strong on small high-dimensional text; explanation is the model itself |
+| Explainability | Exact `tfidf × coefficient` | No post-hoc approximation for a linear model |
+| Database | SQLite via SQLAlchemy | Zero setup, single inspectable audit file; Postgres is a connection-string change |
+| Auth | JWT (HS256) + bcrypt | Stateless verification; credentials never stored in plaintext |
+| Frontend | Next.js 14 + TypeScript | App Router, typed API client, custom design system |
 
-**Why LinearSVC won.** On ~2k documents in a 100k-dimensional sparse space, a max-margin linear separator generalizes better than RandomForest's axis-aligned splits, and edged out logistic regression on the many small, vocabulary-distinctive classes. CV table in `backend/artifacts/cv_comparison_archive.csv`.
-
-**Why the category and the JD match are two numbers, not one.** The classifier answers *"what kind of resume is this?"* using supervised labels; the match score answers *"how well does this resume cover this specific JD?"* and needs no labels. Blending them would produce a single unexplainable number and let a strong category prediction mask a poor JD fit (or vice versa). The UI shows both, separately, always.
-
-**How the match score works (and what it claims).** Default: **JD term coverage** — the idf-weighted share of the JD's content terms (1–2 grams) present in the resume, calibrated on real matched/mismatched pairs (on-target pairs score ~45–60 raw vs ~10–15 off-target, rescaled to a readable 0–100). If `sentence-transformers` is installed, cosine similarity of MiniLM embeddings is used instead. The API reports which method produced every score.
-
-## Privacy guarantee
-
-The raw uploaded file and the unredacted extracted text exist **only inside the request handler, in memory**. They are:
-- never written to the database (only `redacted_resumes.redacted_text` is stored),
-- never written to disk,
-- never logged,
-- explicitly deleted (`del`) as soon as redaction completes.
-
-This is enforced in `api/main.py::_screen_one`, not promised by a UI label. Files that fail the security scan are never even parsed — they get a case row with `status='rejected_unsafe'` and nothing else.
-
-## Design system
-
-Case File / Evidence Intake. Paper tones (`#EDE6D6` canvas, `#F7F3E9` cards), ink chrome (`#1B2430`), amber stamp (`#C9922E`) for match signal, flag red (`#A3402C`) for rejects and missing skills, hairline rules, 0–2px radii. IBM Plex Mono for anything that is data (scores, timestamps, filenames); Public Sans for prose. One signature moment — the 400ms redaction sweep followed by the rotated match-percentage stamp — used exactly once, on a fresh single-case result; batch and compare views stay quiet. Visible 2px focus rings, single-column collapse on mobile, and every animation is disabled under `prefers-reduced-motion`.
-
-## Optional upgrades
-
-All optional — the app runs fully offline without them:
-
-| Install | What improves |
-|---|---|
-| `pip install spacy && python -m spacy download en_core_web_sm` | Person-name redaction via NER (regex tiers stay active regardless) |
-| `pip install sentence-transformers` | JD match switches to MiniLM embedding similarity; `match_method` in responses updates automatically |
-| `pip install oletools` | Deeper VBA macro analysis on DOCX in addition to the zip check |
-
-## Deployment
-
-- **Backend** needs a real Python runtime (the model is loaded in memory): Render, Railway, or Fly.io. Set `CLEARANCE_DB_URL` if you want managed Postgres; otherwise mount a volume for `clearance.db`.
-- **Frontend** on Vercel; set `NEXT_PUBLIC_API_URL` to the deployed backend.
-- Add your deployed frontend origin to `allow_origins` in `backend/api/main.py`.
+---
 
 ## Limitations
 
-Stated because a screening tool that hides its limits is worse than no tool: 24-way single-label classification punishes genuinely multi-label resumes; the model is English-only; regex redaction misses names unless spaCy is installed, and no redactor catches every identifier; the skill list is curated, not learned, so unlisted skills are invisible to the gap analysis; the bias audit covers first-name sensitivity only; exact-duplicate removal doesn't catch near-duplicates (MinHash is the next step); and the honest held-out accuracy is 68.4% — a ranked shortlist with visible explanations, not an automated decision-maker. **No score from this system should be the reason a human doesn't read a resume.**
+Stated because a screening tool that hides its limits is worse than none: 24-way single-label classification punishes genuinely multi-label resumes; the model is English-only; regex redaction misses names unless spaCy is installed, and no redactor catches every identifier; the skill list is curated, not learned; the bias audit covers first-name sensitivity only; exact-duplicate removal does not catch near-duplicates; and stored records have no automatic retention policy yet. The honest held-out accuracy is 68.4% — a ranked shortlist with visible explanations, not an automated decision-maker.

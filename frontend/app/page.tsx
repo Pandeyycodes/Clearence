@@ -8,6 +8,11 @@ import { CaseCard } from "@/components/case";
 const STEPS = ["Security scan", "PII redaction", "Category + JD score",
   "Case record written"];
 
+// Mirror the backend's MAX_UPLOAD_BYTES so oversized files are caught before
+// upload instead of coming back as a 413.
+const MAX_MB = 10;
+const MAX_BYTES = MAX_MB * 1024 * 1024;
+
 export default function Intake() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -21,11 +26,17 @@ export default function Intake() {
 
   const addFiles = (list: FileList | null) => {
     if (!list) return;
-    const accepted = Array.from(list).filter((f) =>
-      /\.(pdf|docx|txt)$/i.test(f.name));
+    const all = Array.from(list);
+    const rightType = all.filter((f) => /\.(pdf|docx|txt)$/i.test(f.name));
+    const accepted = rightType.filter((f) => f.size <= MAX_BYTES);
     setFiles((prev) => [...prev, ...accepted]);
-    if (Array.from(list).length !== accepted.length)
-      setError("Only .pdf, .docx and .txt files are accepted. Others were skipped.");
+
+    const wrongType = all.length - rightType.length;
+    const tooBig = rightType.length - accepted.length;
+    const notes = [];
+    if (wrongType) notes.push("Only .pdf, .docx and .txt files are accepted.");
+    if (tooBig) notes.push(`Files over ${MAX_MB} MB were skipped.`);
+    setError(notes.length ? notes.join(" ") : null);
   };
 
   const submit = async () => {

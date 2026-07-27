@@ -1,6 +1,7 @@
 import "./globals.css";
-import Link from "next/link";
 import type { Metadata } from "next";
+import { Nav } from "@/components/nav";
+import { AuthGate } from "@/components/authgate";
 
 export const metadata: Metadata = {
   title: "Clearance — resume screening with an audit trail",
@@ -23,14 +24,11 @@ export default function RootLayout({ children }:
         <div className="container">
           <header className="masthead">
             <h1>Clearance</h1>
-            <nav>
-              <Link href="/">Intake</Link>
-              <Link href="/history">Case history</Link>
-            </nav>
+            <Nav />
             <span className="tag">nothing is scored before it is scanned
               and redacted</span>
           </header>
-          {children}
+          <AuthGate>{children}</AuthGate>
         </div>
       </body>
     </html>

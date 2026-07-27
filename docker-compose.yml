@@ -1,0 +1,21 @@
+# One command to run the whole system:  docker compose up --build
+# Backend → http://localhost:8000  (docs at /docs)
+# Frontend → http://localhost:3000
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist the SQLite audit trail across restarts.
+      - clearance-data:/data
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  clearance-data:

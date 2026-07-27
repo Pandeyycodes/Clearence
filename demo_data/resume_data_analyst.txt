@@ -1,0 +1,31 @@
+ANANYA IYER
+Data Analyst
+Email: ananya.iyer@gmail.com  |  Phone: +91 90350 11042
+Address: 15 Church Street, Indiranagar, Bengaluru, KA 560038
+GitHub: https://github.com/ananya-iyer  |  LinkedIn: https://linkedin.com/in/ananya-iyer
+
+PROFESSIONAL SUMMARY
+Data analyst with 4 years of experience turning messy data into decisions
+with SQL, Python, and Tableau. Comfortable partnering with finance on
+reporting and light budgeting analysis.
+
+PROFESSIONAL EXPERIENCE
+
+Data Analyst — BrightMetric Analytics, Bengaluru              2021 - Present
+- Build data analysis pipelines and self-serve dashboards in Tableau and
+  Power BI used by 200+ internal stakeholders.
+- Write SQL and Python to model reporting datasets; own data quality checks.
+- Automate Excel-based management reporting and light financial analysis for
+  the finance team, including budgeting support.
+- Run A/B tests and statistical analysis to guide product decisions.
+
+Analyst — DataForge Labs, Hyderabad                           2019 - 2021
+- Built ETL jobs and data visualization for marketing and ops teams.
+- Delivered weekly KPI reporting with Python and SQL.
+
+EDUCATION
+- B.Tech, Computer Science, NIT Trichy — 2019
+
+SKILLS
+data analysis, SQL, Python, Tableau, Power BI, Excel, statistics,
+data visualization, ETL, budgeting

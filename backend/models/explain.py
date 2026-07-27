@@ -15,6 +15,12 @@ def top_terms(pipeline: Pipeline, clean_text: str, predicted_label: str,
               k: int = 10) -> list[dict]:
     vec = pipeline.named_steps["tfidf"]
     clf = pipeline.named_steps["clf"]
+    # Term-level contributions are only exact for linear models (coef_ * tfidf).
+    # If a future retrain picks a non-linear winner (e.g. RandomForest), there
+    # is no honest per-term weight to show — return nothing rather than crash
+    # or fabricate an approximation.
+    if not hasattr(clf, "coef_"):
+        return []
     x = vec.transform([clean_text])
     class_idx = list(clf.classes_).index(predicted_label)
     coef = clf.coef_[class_idx] if clf.coef_.shape[0] > 1 else clf.coef_[0]
