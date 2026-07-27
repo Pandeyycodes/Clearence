@@ -8,7 +8,18 @@ Every resume is **security-scanned**, **PII-redacted**, **classified**, **scored
 
 **Decision support, not automation.** No score from this system should be the reason a human does not read a resume.
 
-`FastAPI` · `scikit-learn` · `SQLAlchemy / SQLite` · `Next.js 14` · `TypeScript` · `JWT` · `Docker`
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?style=flat-square&logo=scikit-learn&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js%2014-000000?style=flat-square&logo=next.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![JWT](https://img.shields.io/badge/Auth-JWT-FB015B?style=flat-square&logo=jsonwebtokens&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+<br/>
+![Tests](https://img.shields.io/badge/tests-24%20passing-brightgreen?style=flat-square)
+![Held-out accuracy](https://img.shields.io/badge/held--out%20accuracy-68.4%25-informational?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
 
 </div>
 
@@ -267,14 +278,11 @@ Two defenses, both enforced: deduplicate before splitting, and keep the vectoriz
 ### Case card — category, match stamp, matched and missing skills, explanation, redacted text
 <img src="docs/screenshots/03-case-card.png" alt="Single case result card" width="820">
 
-### Ranked batch — table view with CSV export
+### Ranked batch — table view, one-click CSV export, and the permanent bias-audit disclosure
 <img src="docs/screenshots/04-batch-table.png" alt="Batch table view" width="820">
 
 ### Ranked batch — grid view
 <img src="docs/screenshots/05-batch-grid.png" alt="Batch grid view" width="820">
-
-### Exported CSV
-<img src="docs/screenshots/06-csv-export.png" alt="Exported CSV opened in a spreadsheet" width="820">
 
 ### Side-by-side compare with unique-skill diff
 <img src="docs/screenshots/07-compare.png" alt="Compare view" width="820">
